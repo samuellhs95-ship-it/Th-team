@@ -1,0 +1,526 @@
+--[[========================================================
+	VENICE HUB  |  Blox Fruits
+	Auto farm por quest (Sea 1 / 2 / 3) + teleportes + utilitarios
+	Banco de quests com NPC, ID interno, nivel e posicao.
+========================================================]]
+
+if getgenv().VeniceHub and getgenv().VeniceHub.Destroy then pcall(getgenv().VeniceHub.Destroy) end
+
+local Players      = game:GetService("Players")
+local RS           = game:GetService("ReplicatedStorage")
+local RunService   = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VIM          = game:GetService("VirtualInputManager")
+local VU           = game:GetService("VirtualUser")
+local CS           = game:GetService("CollectionService")
+local TPS          = game:GetService("TeleportService")
+local Lighting     = game:GetService("Lighting")
+
+local LP    = Players.LocalPlayer
+local CommF = RS:WaitForChild("Remotes"):WaitForChild("CommF_")
+local Enemies = workspace:WaitForChild("Enemies")
+
+local SEA_IDS = { [2753915549]=1, [85211729168715]=1, [4442272183]=2, [79091703265657]=2, [7449423635]=3, [100117331123089]=3 }
+local Sea = SEA_IDS[game.PlaceId] or 1
+
+local V = {
+	AutoFarm=false, AutoQuest=true, KillAura=false, Bring=true, FastAttack=true,
+	AutoBuso=false, AutoChest=false, AutoStat=nil, Selected=nil, Height=25, Dist=6,
+}
+
+-- helpers
+local function root() local c=LP.Character; return c and c:FindFirstChild("HumanoidRootPart") end
+local function hum()  local c=LP.Character; return c and c:FindFirstChildOfClass("Humanoid") end
+local function alive() local h=hum(); return h and h.Health > 0 end
+local function isMarine() return LP.Team and LP.Team.Name == "Marines" end
+
+local noclip = false
+RunService.Stepped:Connect(function()
+	if noclip and LP.Character then
+		for _, p in ipairs(LP.Character:GetDescendants()) do
+			if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+		end
+	end
+end)
+
+local function travel(cf, timeout)
+	if not cf then return end
+	local r = root(); if not r then return end
+	local d = (cf.Position - r.Position).Magnitude
+	local tw = TweenService:Create(r, TweenInfo.new(math.clamp(d/320, .15, 3), Enum.EasingStyle.Linear), {CFrame=cf})
+	tw:Play()
+	local t0 = os.clock()
+	repeat task.wait() r = root() until not r or (r.Position-cf.Position).Magnitude < 18 or os.clock()-t0 > (timeout or 6)
+	if tw.PlaybackState == Enum.PlaybackState.Playing then tw:Cancel() end
+	r = root(); if r then r.CFrame = cf end
+end
+
+local function getEnemy(name, alt)
+	for _, e in ipairs(Enemies:GetChildren()) do
+		local h = e:FindFirstChildOfClass("Humanoid")
+		if h and h.Health > 0 and e:FindFirstChild("HumanoidRootPart") and (e.Name == name or (alt and e.Name == alt)) then
+			return e
+		end
+	end
+end
+
+local function attack(target, keep)
+	local h = target:FindFirstChildOfClass("Humanoid")
+	while target.Parent and h and h.Health > 0 and keep() do
+		local r = root(); local hrp = target:FindFirstChild("HumanoidRootPart")
+		if not r or not hrp then break end
+		r.CFrame = hrp.CFrame * CFrame.new(0, V.Height, V.Dist)
+		if V.Bring then hrp.CFrame = CFrame.new(r.Position) end
+		local tool = LP.Character:FindFirstChildOfClass("Tool")
+		if tool then
+			local lcr = tool:FindFirstChild("LeftClickRemote")
+			if lcr then lcr:FireServer(Vector3.new(.01,-500,.01), 1, true); lcr:FireServer(false)
+			else VIM:SendMouseButtonEvent(0,0,0,true,game,1); VIM:SendMouseButtonEvent(0,0,0,false,game,1) end
+		end
+		if V.FastAttack then
+			for _, k in ipairs({"Z","X"}) do
+				VIM:SendKeyEvent(true,k,false,game); VIM:SendKeyEvent(false,k,false,game)
+			end
+		end
+		task.wait(.08)
+	end
+end
+
+--========================================================
+-- BANCO DE QUESTS  {Nivel, Quest, Id, Num, Ilha, NPC, PosNPC, Mob, PosMob, Entrada, Time, Alt}
+--========================================================
+local QDB = {[1]={
+{1,"Bandit","BanditQuest1",1,"Pirate Starter","Bandit Quest Giver",CFrame.new(1045.96,27.00,1560.82),"Bandit",CFrame.new(1045.96,27.00,1560.82),nil,"Pirates"},
+{1,"Trainee","MarineQuest",1,"Marine Starter","Marine Leader",CFrame.new(-2709.67,24.52,2104.24),"Trainee",CFrame.new(-2709.67,24.52,2104.24),nil,"Marines"},
+{10,"Monkey","JungleQuest",1,"Jungle","Adventurer",CFrame.new(-1598.08,35.55,153.37),"Monkey",CFrame.new(-1448.51,67.85,11.46)},
+{15,"Gorilla","JungleQuest",2,"Jungle","Adventurer",CFrame.new(-1598.08,35.55,153.37),"Gorilla",CFrame.new(-1129.88,40.46,-525.42)},
+{20,"Gorilla King","JungleQuest",3,"Jungle","Adventurer",CFrame.new(-1598.08,35.55,153.37),"Gorilla King",CFrame.new(-1088.75,8.13,-488.55)},
+{30,"Pirate","BuggyQuest1",1,"Pirate Village","Pirate Adventurer",CFrame.new(-1141.07,4.10,3831.54),"Pirate",CFrame.new(-1103.51,13.75,3896.09)},
+{40,"Brute","BuggyQuest1",2,"Pirate Village","Pirate Adventurer",CFrame.new(-1141.07,4.10,3831.54),"Brute",CFrame.new(-1140.08,14.80,4322.92)},
+{55,"Chef","BuggyQuest1",3,"Pirate Village","Pirate Adventurer",CFrame.new(-1141.07,4.10,3831.54),"Chef",CFrame.new(-1150.00,15.00,4380.00)},
+{60,"Desert Bandit","DesertQuest",1,"Desert","Desert Adventurer",CFrame.new(894.48,5.14,4392.43),"Desert Bandit",CFrame.new(924.79,6.44,4481.58)},
+{75,"Desert Officer","DesertQuest",2,"Desert","Desert Adventurer",CFrame.new(894.48,5.14,4392.43),"Desert Officer",CFrame.new(1608.28,8.61,4371.00)},
+{90,"Snow Bandit","SnowQuest",1,"Frozen Village","Villager",CFrame.new(1389.74,88.15,-1298.90),"Snow Bandit",CFrame.new(1354.34,87.27,-1393.94)},
+{100,"Snowman","SnowQuest",2,"Frozen Village","Villager",CFrame.new(1389.74,88.15,-1298.90),"Snowman",CFrame.new(6241.99,51.52,-1243.97)},
+{105,"Yeti","SnowQuest",3,"Frozen Village","Villager",CFrame.new(1389.74,88.15,-1298.90),"Yeti",CFrame.new(1218.79,138.01,-1488.02)},
+{120,"Chief Petty Officer","MarineQuest2",1,"Marine Fortress","Marine",CFrame.new(-5039.58,27.35,4324.68),"Chief Petty Officer",CFrame.new(-4881.23,22.65,4273.75)},
+{130,"Vice Admiral","MarineQuest2",2,"Marine Fortress","Marine",CFrame.new(-5039.58,27.35,4324.68),"Vice Admiral",CFrame.new(-5006.54,88.03,4353.16)},
+{150,"Sky Bandit","SkyQuest",1,"Skylands","Sky Adventurer",CFrame.new(-4839.53,716.36,-2619.44),"Sky Bandit",CFrame.new(-4953.20,295.74,-2899.22)},
+{175,"Dark Master","SkyQuest",2,"Skylands","Sky Adventurer",CFrame.new(-4839.53,716.36,-2619.44),"Dark Master",CFrame.new(-5259.84,391.39,-2229.03)},
+{190,"Prisoner","PrisonerQuest",1,"Prison","Jail Keeper",CFrame.new(5308.93,1.65,475.12),"Prisoner",CFrame.new(5098.97,-0.32,474.23)},
+{210,"Dangerous Prisoner","PrisonerQuest",2,"Prison","Jail Keeper",CFrame.new(5308.93,1.65,475.12),"Dangerous Prisoner",CFrame.new(5654.56,15.63,866.29)},
+{225,"Ruthless Prisoner","PrisonerQuest",3,"Prison","Head Jailer",CFrame.new(5191.86,2.84,686.43),"Ruthless Prisoner",CFrame.new(5206.92,0.99,814.97)},
+{230,"Warden","ImpelQuest",1,"Prison","Head Jailer",CFrame.new(5191.86,2.84,686.43),"Warden",CFrame.new(5278.04,2.15,944.10)},
+{250,"Toga Warrior","ColosseumQuest",1,"Colosseum","Colosseum Quest Giver",CFrame.new(-1580.04,6.35,-2986.47),"Toga Warrior",CFrame.new(-1820.21,51.68,-2740.66)},
+{275,"Gladiator","ColosseumQuest",2,"Colosseum","Colosseum Quest Giver",CFrame.new(-1580.04,6.35,-2986.47),"Gladiator",CFrame.new(-1292.83,56.38,-3339.03)},
+{300,"Military Soldier","MagmaQuest",1,"Magma Village","The Mayor",CFrame.new(-5313.37,10.95,8515.29),"Military Soldier",CFrame.new(-5411.16,11.08,8454.29)},
+{325,"Military Spy","MagmaQuest",2,"Magma Village","The Mayor",CFrame.new(-5313.37,10.95,8515.29),"Military Spy",CFrame.new(-5802.86,86.26,8828.85)},
+{350,"Magma General","MagmaQuest",3,"Magma Village","The Mayor",CFrame.new(-5313.37,10.95,8515.29),"Magma General",CFrame.new(-5765.89,82.92,8718.30)},
+{375,"Fishman Warrior","FishmanQuest",1,"Underwater City","King Neptune",CFrame.new(61122.65,18.49,1569.39),"Fishman Warrior",CFrame.new(60878.30,18.48,1543.75),Vector3.new(61163.85,11.67,1819.78)},
+{400,"Fishman Commando","FishmanQuest",2,"Underwater City","King Neptune",CFrame.new(61122.65,18.49,1569.39),"Fishman Commando",CFrame.new(61922.63,18.48,1493.93),Vector3.new(61163.85,11.67,1819.78)},
+{425,"Fishman Lord","FishmanQuest",3,"Underwater City","King Neptune",CFrame.new(61122.65,18.49,1569.39),"Fishman Lord",CFrame.new(61260.15,30.95,1193.43),Vector3.new(61163.85,11.67,1819.78)},
+{450,"God's Guard","SkyExp1Quest",1,"Upper Skylands","Mole",CFrame.new(-4721.88,843.87,-1949.96),"God's Guard",CFrame.new(-4710.04,845.27,-1927.30),Vector3.new(-4607.82,872.54,-1667.55)},
+{475,"Shanda","SkyExp1Quest",2,"Upper Skylands","Mole",CFrame.new(-7859.09,5544.19,-381.47),"Shanda",CFrame.new(-7678.48,5566.40,-497.21),Vector3.new(-7894.61,5547.14,-380.29)},
+{500,"Sky Warlord","SkyExp1Quest",3,"Upper Skylands","Mole",CFrame.new(-7859.09,5544.19,-381.47),"Sky Warlord",CFrame.new(-7866.13,5576.43,-546.74),Vector3.new(-7894.61,5547.14,-380.29)},
+{525,"Royal Squad","SkyExp2Quest",1,"Upper Skylands","Sky Quest Giver 2",CFrame.new(-7906.81,5634.66,-1411.99),"Royal Squad",CFrame.new(-7624.25,5658.13,-1467.35)},
+{550,"Royal Soldier","SkyExp2Quest",2,"Upper Skylands","Sky Quest Giver 2",CFrame.new(-7906.81,5634.66,-1411.99),"Royal Soldier",CFrame.new(-7836.75,5645.66,-1790.62)},
+{575,"Lightning God","SkyExp2Quest",3,"Upper Skylands","Sky Quest Giver 2",CFrame.new(-7906.81,5634.66,-1411.99),"Lightning God",CFrame.new(-7994.98,5761.02,-2088.64)},
+{625,"Galley Pirate","FountainQuest",1,"Fountain City","Freezeburg Quest Giver",CFrame.new(5259.81,37.35,4050.02),"Galley Pirate",CFrame.new(5551.02,78.90,3930.41)},
+{650,"Galley Captain","FountainQuest",2,"Fountain City","Freezeburg Quest Giver",CFrame.new(5259.81,37.35,4050.02),"Galley Captain",CFrame.new(5441.95,42.50,4950.09)},
+{675,"Cyborg","FountainQuest",3,"Fountain City","Freezeburg Quest Giver",CFrame.new(5259.81,37.35,4050.02),"Cyborg",CFrame.new(6094.02,73.77,3825.73)},
+},[2]={
+{700,"Raider","Area1Quest",1,"Kingdom of Rose","Area 1 Quest Giver",CFrame.new(-429.54,71.76,1836.18),"Raider",CFrame.new(-728.32,52.77,2345.77)},
+{725,"Mercenary","Area1Quest",2,"Kingdom of Rose","Area 1 Quest Giver",CFrame.new(-429.54,71.76,1836.18),"Mercenary",CFrame.new(-1004.32,80.15,1424.61)},
+{750,"Diamond","Area1Quest",3,"Kingdom of Rose","Area 1 Quest Giver",CFrame.new(-429.54,71.76,1836.18),"Diamond",CFrame.new(-1576.71,198.59,13.72)},
+{775,"Swan Pirate","Area2Quest",1,"Kingdom of Rose","Area 2 Quest Giver",CFrame.new(638.43,71.76,918.28),"Swan Pirate",CFrame.new(1068.66,137.61,1322.10)},
+{800,"Factory Staff","Area2Quest",2,"Kingdom of Rose","Area 2 Quest Giver",CFrame.new(638.43,71.76,918.28),"Factory Staff",CFrame.new(73.07,81.86,-27.47)},
+{850,"Jeremy","Area2Quest",3,"Kingdom of Rose","Area 2 Quest Giver",CFrame.new(638.43,71.76,918.28),"Jeremy",CFrame.new(2006.92,448.95,853.98)},
+{875,"Marine Lieutenant","MarineQuest3",1,"Green Zone","Marine Quest Giver",CFrame.new(-2440.79,71.71,-3216.06),"Marine Lieutenant",CFrame.new(-2821.37,75.89,-3070.08)},
+{900,"Marine Captain","MarineQuest3",2,"Green Zone","Marine Quest Giver",CFrame.new(-2440.79,71.71,-3216.06),"Marine Captain",CFrame.new(-1861.23,80.17,-3254.69)},
+{925,"Orbitus","MarineQuest3",3,"Green Zone","Marine Quest Giver",CFrame.new(-2440.79,71.71,-3216.06),"Orbitus",CFrame.new(-2172.73,103.32,-4015.02)},
+{950,"Zombie","ZombieQuest",1,"Graveyard Island","Graveyard Quest Giver",CFrame.new(-5497.06,47.59,-795.23),"Zombie",CFrame.new(-5657.77,78.96,-928.68)},
+{975,"Vampire","ZombieQuest",2,"Graveyard Island","Graveyard Quest Giver",CFrame.new(-5497.06,47.59,-795.23),"Vampire",CFrame.new(-6037.66,32.18,-1340.65)},
+{1000,"Snow Trooper","SnowMountainQuest",1,"Snow Mountain","Snow Quest Giver",CFrame.new(609.85,400.11,-5372.25),"Snow Trooper",CFrame.new(549.14,427.38,-5563.69)},
+{1050,"Winter Warrior","SnowMountainQuest",2,"Snow Mountain","Snow Quest Giver",CFrame.new(609.85,400.11,-5372.25),"Winter Warrior",CFrame.new(1142.74,475.63,-5199.41)},
+{1100,"Lab Subordinate","IceSideQuest",1,"Hot and Cold","Ice Quest Giver",CFrame.new(-6064.06,15.24,-4902.97),"Lab Subordinate",CFrame.new(-5707.47,15.95,-4513.39)},
+{1125,"Horned Warrior","IceSideQuest",2,"Hot and Cold","Ice Quest Giver",CFrame.new(-6064.06,15.24,-4902.97),"Horned Warrior",CFrame.new(-6341.36,15.95,-5723.16)},
+{1150,"Smoke Admiral","IceSideQuest",3,"Hot and Cold","Ice Quest Giver",CFrame.new(-6064.06,15.24,-4902.97),"Smoke Admiral",CFrame.new(-5275.19,20.75,-5260.66)},
+{1175,"Magma Ninja","FireSideQuest",1,"Hot and Cold","Fire Quest Giver",CFrame.new(-5428.03,15.06,-5299.43),"Magma Ninja",CFrame.new(-5449.67,76.65,-5808.20)},
+{1200,"Lava Pirate","FireSideQuest",2,"Hot and Cold","Fire Quest Giver",CFrame.new(-5428.03,15.06,-5299.43),"Lava Pirate",CFrame.new(-5213.33,49.73,-4701.45)},
+{1250,"Ship Deckhand","ShipQuest1",1,"Cursed Ship","Rear Crew Quest Giver",CFrame.new(1037.80,125.09,32911.60),"Ship Deckhand",CFrame.new(1212.01,150.79,33059.24),Vector3.new(923.21,126.97,32852.83)},
+{1275,"Ship Engineer","ShipQuest1",2,"Cursed Ship","Rear Crew Quest Giver",CFrame.new(1037.80,125.09,32911.60),"Ship Engineer",CFrame.new(919.47,43.54,32779.96),Vector3.new(923.21,126.97,32852.83)},
+{1300,"Ship Steward","ShipQuest2",1,"Cursed Ship","Front Crew Quest Giver",CFrame.new(968.80,125.09,33244.12),"Ship Steward",CFrame.new(919.43,129.55,33436.03),Vector3.new(923.21,126.97,32852.83)},
+{1325,"Ship Officer","ShipQuest2",2,"Cursed Ship","Front Crew Quest Giver",CFrame.new(968.80,125.09,33244.12),"Ship Officer",CFrame.new(1036.01,181.43,33315.72),Vector3.new(923.21,126.97,32852.83)},
+{1350,"Arctic Warrior","FrostQuest",1,"Ice Castle","Frost Quest Giver",CFrame.new(5667.65,26.79,-6486.08),"Arctic Warrior",CFrame.new(5966.24,62.97,-6179.38),Vector3.new(5439.71,84.42,-6715.16)},
+{1375,"Snow Lurker","FrostQuest",2,"Ice Castle","Frost Quest Giver",CFrame.new(5667.65,26.79,-6486.08),"Snow Lurker",CFrame.new(5407.07,69.19,-6880.88),Vector3.new(5439.71,84.42,-6715.16)},
+{1400,"Awakened Ice Admiral","FrostQuest",3,"Ice Castle","Frost Quest Giver",CFrame.new(5667.65,26.79,-6486.08),"Awakened Ice Admiral",CFrame.new(6403.54,340.29,-6894.55),Vector3.new(5439.71,84.42,-6715.16)},
+{1425,"Sea Soldier","ForgottenQuest",1,"Forgotten Island","Forgotten Quest Giver",CFrame.new(-3054.44,235.54,-10142.81),"Sea Soldier",CFrame.new(-3028.22,64.67,-9775.42)},
+{1450,"Water Fighter","ForgottenQuest",2,"Forgotten Island","Forgotten Quest Giver",CFrame.new(-3054.44,235.54,-10142.81),"Water Fighter",CFrame.new(-3352.90,285.01,-10534.84)},
+{1475,"Tide Keeper","ForgottenQuest",3,"Forgotten Island","Forgotten Quest Giver",CFrame.new(-3054.44,235.54,-10142.81),"Tide Keeper",CFrame.new(-3795.64,105.88,-11421.30)},
+},[3]={
+{1500,"Pirate Millionaire","PiratePortQuest",1,"Port Town","Pirate Port Quest Giver",CFrame.new(-712.82,98.57,5711.95),"Pirate Millionaire",CFrame.new(-712.82,98.57,5711.95)},
+{1525,"Pistol Billionaire","PiratePortQuest",2,"Port Town","Pirate Port Quest Giver",CFrame.new(-723.43,147.42,5931.99),"Pistol Billionaire",CFrame.new(-723.43,147.42,5931.99)},
+{1550,"Stone","PiratePortQuest",3,"Port Town","Pirate Port Quest Giver",CFrame.new(-723.43,147.42,5931.99),"Stone",CFrame.new(-289.76,43.81,5579.93)},
+{1575,"Dragon Crew Warrior","AmazonQuest",1,"Hydra Island","Dragon Crew Quest Giver",CFrame.new(6779.03,111.16,-801.21),"Dragon Crew Warrior",CFrame.new(6779.03,111.16,-801.21)},
+{1600,"Dragon Crew Archer","AmazonQuest",2,"Hydra Island","Dragon Crew Quest Giver",CFrame.new(6955.89,546.66,309.04),"Dragon Crew Archer",CFrame.new(6955.89,546.66,309.04)},
+{1625,"Hydra Enforcer","VenomCrewQuest",1,"Hydra Island","Hydra Town Quest Giver",CFrame.new(4620.61,1002.29,399.08),"Hydra Enforcer",CFrame.new(4620.61,1002.29,399.08)},
+{1650,"Venomous Assailant","VenomCrewQuest",2,"Hydra Island","Hydra Town Quest Giver",CFrame.new(4697.59,1100.65,946.40),"Venomous Assailant",CFrame.new(4697.59,1100.65,946.40)},
+{1675,"Hydra Leader","VenomCrewQuest",3,"Hydra Island","Hydra Town Quest Giver",CFrame.new(4697.59,1100.65,946.40),"Hydra Leader",CFrame.new(5821.89,1019.09,-73.71)},
+{1700,"Marine Commodore","MarineTreeIsland",1,"Great Tree","Marine Tree Quest Giver",CFrame.new(2180.54,27.81,-6741.54),"Marine Commodore",CFrame.new(2286.00,73.13,-7159.80)},
+{1725,"Marine Rear Admiral","MarineTreeIsland",2,"Great Tree","Marine Tree Quest Giver",CFrame.new(2179.98,28.73,-6740.05),"Marine Rear Admiral",CFrame.new(3656.77,160.52,-7001.59)},
+{1750,"Kilo Admiral","MarineTreeIsland",3,"Great Tree","Marine Tree Quest Giver",CFrame.new(2179.98,28.73,-6740.05),"Kilo Admiral",CFrame.new(2764.22,432.46,-7144.45)},
+{1775,"Fishman Raider","DeepForestIsland3",1,"Floating Turtle","Turtle Adventure Quest Giver",CFrame.new(-10581.65,330.87,-8761.18),"Fishman Raider",CFrame.new(-10407.52,331.76,-8368.51)},
+{1800,"Fishman Captain","DeepForestIsland3",2,"Floating Turtle","Turtle Adventure Quest Giver",CFrame.new(-10581.65,330.87,-8761.18),"Fishman Captain",CFrame.new(-10994.70,352.38,-9002.11)},
+{1825,"Forest Pirate","DeepForestIsland",1,"Floating Turtle","Deep Forest Quest Giver",CFrame.new(-13234.04,331.48,-7625.40),"Forest Pirate",CFrame.new(-13274.47,332.37,-7769.58)},
+{1850,"Mythological Pirate","DeepForestIsland",2,"Floating Turtle","Deep Forest Quest Giver",CFrame.new(-13234.04,331.48,-7625.40),"Mythological Pirate",CFrame.new(-13680.60,501.08,-6991.18)},
+{1875,"Captain Elephant","DeepForestIsland",3,"Floating Turtle","Deep Forest Quest Giver",CFrame.new(-13234.04,331.48,-7625.40),"Captain Elephant",CFrame.new(-13376.75,433.28,-8071.39)},
+{1900,"Jungle Pirate","DeepForestIsland2",1,"Floating Turtle","Deep Forest Area 2 Quest Giver",CFrame.new(-12680.38,389.97,-9902.01),"Jungle Pirate",CFrame.new(-12256.16,331.73,-10485.83)},
+{1925,"Musketeer Pirate","DeepForestIsland2",2,"Floating Turtle","Deep Forest Area 2 Quest Giver",CFrame.new(-12680.38,389.97,-9902.01),"Musketeer Pirate",CFrame.new(-13457.90,391.54,-9859.17)},
+{1950,"Beautiful Pirate","DeepForestIsland2",3,"Floating Turtle","Deep Forest Area 2 Quest Giver",CFrame.new(-12680.38,389.97,-9902.01),"Beautiful Pirate",CFrame.new(5283.60,22.56,-110.78)},
+{1975,"Reborn Skeleton","HauntedQuest1",1,"Haunted Castle","Haunted Castle Quest Giver 1",CFrame.new(-9479.21,141.21,5566.09),"Reborn Skeleton",CFrame.new(-8763.72,165.72,6159.86)},
+{2000,"Living Zombie","HauntedQuest1",2,"Haunted Castle","Haunted Castle Quest Giver 1",CFrame.new(-9479.21,141.21,5566.09),"Living Zombie",CFrame.new(-10144.13,138.62,5838.08)},
+{2025,"Demonic Soul","HauntedQuest2",1,"Haunted Castle","Haunted Castle Quest Giver 2",CFrame.new(-9516.99,172.01,6078.46),"Demonic Soul",CFrame.new(-9505.87,172.10,6158.99)},
+{2050,"Possessed Mummy","HauntedQuest2",2,"Haunted Castle","Haunted Castle Quest Giver 2",CFrame.new(-9516.99,172.01,6078.46),"Possessed Mummy",CFrame.new(-9582.02,6.25,6205.47),nil,nil,"Posessed Mummy"},
+{2075,"Peanut Scout","NutsIslandQuest",1,"Sea of Treats","Peanut Quest Giver",CFrame.new(-2104.39,38.10,-10194.21),"Peanut Scout",CFrame.new(-2143.24,47.72,-10029.99)},
+{2100,"Peanut President","NutsIslandQuest",2,"Sea of Treats","Peanut Quest Giver",CFrame.new(-2104.39,38.10,-10194.21),"Peanut President",CFrame.new(-1859.35,38.10,-10422.42)},
+{2125,"Ice Cream Chef","IceCreamIslandQuest",1,"Sea of Treats","Ice Cream Quest Giver",CFrame.new(-820.64,65.81,-10965.79),"Ice Cream Chef",CFrame.new(-872.24,65.81,-10919.95)},
+{2150,"Ice Cream Commander","IceCreamIslandQuest",2,"Sea of Treats","Ice Cream Quest Giver",CFrame.new(-820.64,65.81,-10965.79),"Ice Cream Commander",CFrame.new(-558.06,112.04,-11290.77)},
+{2175,"Cake Queen","IceCreamIslandQuest",3,"Sea of Treats","Ice Cream Quest Giver",CFrame.new(-820.64,65.81,-10965.79),"Cake Queen",CFrame.new(-709.31,381.60,-11011.39)},
+{2200,"Cookie Crafter","CakeQuest1",1,"Sea of Treats","Cake Quest Giver 1",CFrame.new(-2021.32,37.79,-12028.72),"Cookie Crafter",CFrame.new(-2374.13,37.79,-12125.30)},
+{2225,"Cake Guard","CakeQuest1",2,"Sea of Treats","Cake Quest Giver 1",CFrame.new(-2021.32,37.79,-12028.72),"Cake Guard",CFrame.new(-1598.30,43.77,-12244.58)},
+{2250,"Baking Staff","CakeQuest2",1,"Sea of Treats","Cake Quest Giver 2",CFrame.new(-1927.91,37.79,-12842.53),"Baking Staff",CFrame.new(-1887.80,77.61,-12998.35)},
+{2275,"Head Baker","CakeQuest2",2,"Sea of Treats","Cake Quest Giver 2",CFrame.new(-1927.91,37.79,-12842.53),"Head Baker",CFrame.new(-2216.18,82.88,-12869.29)},
+{2300,"Cocoa Warrior","ChocQuest1",1,"Sea of Treats","Chocolate Quest Giver 1",CFrame.new(233.22,29.87,-12201.23),"Cocoa Warrior",CFrame.new(-21.55,80.57,-12352.38)},
+{2325,"Chocolate Bar Battler","ChocQuest1",2,"Sea of Treats","Chocolate Quest Giver 1",CFrame.new(233.22,29.87,-12201.23),"Chocolate Bar Battler",CFrame.new(582.59,77.18,-12463.16)},
+{2350,"Sweet Thief","ChocQuest2",1,"Sea of Treats","Chocolate Quest Giver 2",CFrame.new(150.50,30.69,-12774.50),"Sweet Thief",CFrame.new(165.18,76.05,-12600.83)},
+{2375,"Candy Rebel","ChocQuest2",2,"Sea of Treats","Chocolate Quest Giver 2",CFrame.new(150.50,30.69,-12774.50),"Candy Rebel",CFrame.new(134.86,77.24,-12876.54)},
+{2400,"Candy Pirate","CandyQuest1",1,"Sea of Treats","Candy Cane Quest Giver",CFrame.new(-1150.04,20.37,-14446.33),"Candy Pirate",CFrame.new(-1310.50,26.01,-14562.40)},
+{2425,"Snow Demon","CandyQuest1",2,"Sea of Treats","Candy Cane Quest Giver",CFrame.new(-1150.04,20.37,-14446.33),"Snow Demon",CFrame.new(-1310.50,26.01,-14562.40)},
+{2450,"Isle Outlaw","TikiQuest1",1,"Tiki Outpost","Tiki Quest Giver 1",CFrame.new(-16548.81,55.60,-172.81),"Isle Outlaw",CFrame.new(-16479.90,226.61,-300.31)},
+{2475,"Island Boy","TikiQuest1",2,"Tiki Outpost","Tiki Quest Giver 1",CFrame.new(-16548.81,55.60,-172.81),"Island Boy",CFrame.new(-16849.39,192.86,-150.78)},
+{2500,"Sun-kissed Warrior","TikiQuest2",1,"Tiki Outpost","Tiki Quest Giver 2",CFrame.new(-16538.00,55.00,1049.00),"Sun-kissed Warrior",CFrame.new(-16347.00,64.00,984.00)},
+{2525,"Isle Champion","TikiQuest2",2,"Tiki Outpost","Tiki Quest Giver 2",CFrame.new(-16538.00,55.00,1049.00),"Isle Champion",CFrame.new(-16602.10,130.38,1087.24)},
+{2550,"Serpent Hunter","TikiQuest3",1,"Tiki Outpost","Tiki Quest Giver 3",CFrame.new(-16679.47,176.74,1474.39),"Serpent Hunter",CFrame.new(-16679.47,176.74,1474.39)},
+{2575,"Skull Slayer","TikiQuest3",2,"Tiki Outpost","Tiki Quest Giver 3",CFrame.new(-16759.58,71.28,1595.33),"Skull Slayer",CFrame.new(-16759.58,71.28,1595.33)},
+{2600,"Reef Bandit","SubmergedQuest1",1,"Submerged Island","Submerged Quest Giver 1",CFrame.new(10882.26,-2086.32,10034.22),"Reef Bandit",CFrame.new(10736.61,-2087.84,9338.48)},
+{2625,"Coral Pirate","SubmergedQuest1",2,"Submerged Island","Submerged Quest Giver 1",CFrame.new(10882.26,-2086.32,10034.22),"Coral Pirate",CFrame.new(10965.10,-2158.88,9177.25)},
+{2650,"Sea Chanter","SubmergedQuest2",1,"Submerged Island","Submerged Quest Giver 2",CFrame.new(10882.26,-2086.32,10034.22),"Sea Chanter",CFrame.new(10621.03,-2087.84,10102.03)},
+{2675,"Ocean Prophet","SubmergedQuest2",2,"Submerged Island","Submerged Quest Giver 2",CFrame.new(10882.26,-2086.32,10034.22),"Ocean Prophet",CFrame.new(11056.14,-2001.67,10117.44)},
+{2700,"High Disciple","SubmergedQuest3",1,"Submerged Island","Submerged Quest Giver 3",CFrame.new(9636.52,-1992.19,9609.52),"High Disciple",CFrame.new(9828.08,-1940.90,9693.06)},
+{2725,"Grand Devotee","SubmergedQuest3",2,"Submerged Island","Submerged Quest Giver 3",CFrame.new(9636.52,-1992.19,9609.52),"Grand Devotee",CFrame.new(9557.58,-1928.04,9859.18)},
+}}
+
+--========================================================
+-- LOGICA DE QUEST
+--========================================================
+local function questGui()
+	local main = LP.PlayerGui:FindFirstChild("Main")
+	return main and main:FindFirstChild("Quest")
+end
+local function questOpen() local q = questGui(); return q and q.Visible end
+local function questTitle()
+	local ok, txt = pcall(function() return questGui().Container.QuestTitle.Title.Text end)
+	return ok and txt or ""
+end
+
+local function pickQuest()
+	local lvl = LP.Data.Level.Value
+	local best
+	for _, q in ipairs(QDB[Sea]) do
+		if q[10] and q[10] ~= (isMarine() and "Marines" or "Pirates") then continue end
+		if q[1] <= lvl then best = q end
+	end
+	return best or QDB[Sea][1]
+end
+
+local function enter(q)
+	if q[9] and root() then
+		CommF:InvokeServer("requestEntrance", q[9])
+		task.wait(.6)
+	end
+end
+
+local function doQuest(q)
+	if not q then return end
+	if questOpen() then
+		if not string.find(questTitle(), q[7]) and not (q[12] and string.find(questTitle(), q[12])) then
+			CommF:InvokeServer("AbandonQuest")
+			task.wait(.3)
+			return
+		end
+		local e = getEnemy(q[7], q[12])
+		if e then attack(e, function() return V.AutoFarm and questOpen() end)
+		else travel(q[8]) end
+	elseif V.AutoQuest then
+		enter(q)
+		travel(q[6])
+		local r = root()
+		if r and (r.Position - q[6].Position).Magnitude < 14 then
+			CommF:InvokeServer("SetSpawnPoint")
+			CommF:InvokeServer("StartQuest", q[3], q[4])
+			task.wait(.4)
+		end
+	end
+end
+
+task.spawn(function()
+	while task.wait(.1) do
+		if V.AutoFarm and alive() then
+			pcall(function() doQuest(V.Selected or pickQuest()) end)
+		end
+	end
+end)
+
+task.spawn(function()
+	while task.wait(.15) do
+		if V.KillAura and alive() then
+			local r = root()
+			for _, e in ipairs(Enemies:GetChildren()) do
+				local h = e:FindFirstChildOfClass("Humanoid")
+				local hrp = e:FindFirstChild("HumanoidRootPart")
+				if h and h.Health > 0 and hrp and r and (hrp.Position - r.Position).Magnitude < 120 then
+					pcall(attack, e, function() return V.KillAura end)
+				end
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while task.wait(1) do
+		pcall(function()
+			if V.AutoBuso and LP.Character and not LP.Character:FindFirstChild("HasBuso") then CommF:InvokeServer("Buso") end
+			if V.AutoStat and LP.Data.Points.Value > 0 then CommF:InvokeServer("AddPoint", V.AutoStat, 3) end
+		end)
+	end
+end)
+
+task.spawn(function()
+	while task.wait(1) do
+		if V.AutoChest and alive() then
+			pcall(function()
+				local r = root()
+				for _, c in ipairs(CS:GetTagged("_ChestTagged")) do
+					if c:IsA("Model") and c.PrimaryPart and r and (c:GetPivot().Position - r.Position).Magnitude < 400 then
+						r.CFrame = c:GetPivot()
+					end
+				end
+			end)
+		end
+	end
+end)
+
+LP.Idled:Connect(function()
+	if V.AntiAFK then
+		VU:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+		task.wait(1)
+		VU:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+	end
+end)
+
+--========================================================
+-- INTERFACE
+--========================================================
+local function new(cls, props, parent)
+	local o = Instance.new(cls)
+	for k, v in pairs(props) do o[k] = v end
+	o.Parent = parent
+	return o
+end
+
+local GUI = new("ScreenGui", {Name="VeniceHub", ResetOnSpawn=false, ZIndexBehavior=Enum.ZIndexBehavior.Sibling}, game:GetService("CoreGui"))
+local Main = new("Frame", {Size=UDim2.fromOffset(560,380), Position=UDim2.new(.5,-280,.5,-190), BackgroundColor3=Color3.fromRGB(20,20,26), BorderSizePixel=0}, GUI)
+new("UICorner", {CornerRadius=UDim.new(0,10)}, Main)
+new("UIStroke", {Color=Color3.fromRGB(120,80,220), Thickness=1}, Main)
+
+local Title = new("TextLabel", {Size=UDim2.new(1,-40,0,34), Position=UDim2.new(0,16,0,8), BackgroundTransparency=1, Font=Enum.Font.GothamBold, TextSize=15, TextColor3=Color3.fromRGB(230,230,240), TextXAlignment=Enum.TextXAlignment.Left, Text="VENICE HUB  ·  Blox Fruits  ·  Sea "..Sea}, Main)
+local Close = new("TextButton", {Size=UDim2.new(0,26,0,26), Position=UDim2.new(1,-34,0,10), BackgroundColor3=Color3.fromRGB(45,45,58), Text="×", Font=Enum.Font.GothamBold, TextSize=16, TextColor3=Color3.fromRGB(230,230,240)}, Main)
+new("UICorner", {CornerRadius=UDim.new(0,6)}, Close)
+
+local Toast = new("TextLabel", {Size=UDim2.new(0,260,0,30), Position=UDim2.new(.5,-130,1,-42), BackgroundColor3=Color3.fromRGB(35,35,46), TextColor3=Color3.fromRGB(180,255,180), Font=Enum.Font.Gotham, TextSize=12, Visible=false}, Main)
+new("UICorner", {CornerRadius=UDim.new(0,6)}, Toast)
+local function notify(t) Toast.Text = t; Toast.Visible = true; task.delay(2.5, function() Toast.Visible = false end) end
+
+local Sidebar = new("Frame", {Size=UDim2.new(0,110,1,-58), Position=UDim2.new(0,12,0,46), BackgroundTransparency=1}, Main)
+local Pages = new("Frame", {Size=UDim2.new(1,-146,1,-58), Position=UDim2.new(0,134,0,46), BackgroundTransparency=1}, Main)
+
+local pages, tabs = {}, {}
+local function page(name)
+	local f = new("ScrollingFrame", {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, CanvasSize=UDim2.new(0,0,0,0), AutomaticCanvasSize=Enum.AutomaticSize.Y, ScrollBarThickness=3, Visible=false}, Pages)
+	pages[name] = f
+	local b = new("TextButton", {Size=UDim2.new(1,0,0,30), BackgroundColor3=Color3.fromRGB(28,28,36), Text=name, Font=Enum.Font.Gotham, TextSize=12, TextColor3=Color3.fromRGB(200,200,215)}, Sidebar)
+	new("UICorner", {CornerRadius=UDim.new(0,6)}, b)
+	local y = #tabs * 36
+	b.Position = UDim2.new(0,0,0,y)
+	tabs[#tabs+1] = b
+	b.MouseButton1Click:Connect(function()
+		for n, p in pairs(pages) do p.Visible = (n == name) end
+		for _, t in ipairs(tabs) do t.BackgroundColor3 = Color3.fromRGB(28,28,36) end
+		b.BackgroundColor3 = Color3.fromRGB(70,50,120)
+	end)
+	return f
+end
+
+local function label(parent, txt, size)
+	return new("TextLabel", {Size=UDim2.new(1,0,0,size or 22), BackgroundTransparency=1, Font=Enum.Font.GothamBold, TextSize=12, TextColor3=Color3.fromRGB(150,150,170), TextXAlignment=Enum.TextXAlignment.Left, Text=txt}, parent)
+end
+
+local function toggle(parent, txt, key, default)
+	local row = new("Frame", {Size=UDim2.new(1,0,0,28), BackgroundColor3=Color3.fromRGB(28,28,36)}, parent)
+	new("UICorner", {CornerRadius=UDim.new(0,6)}, row)
+	local l = new("TextLabel", {Size=UDim2.new(1,-50,1,0), Position=UDim2.new(0,10,0,0), BackgroundTransparency=1, Font=Enum.Font.Gotham, TextSize=12, TextColor3=Color3.fromRGB(215,215,225), TextXAlignment=Enum.TextXAlignment.Left, Text=txt}, row)
+	local dot = new("Frame", {Size=UDim2.new(0,16,0,16), Position=UDim2.new(1,-26,.5,-8), BackgroundColor3=Color3.fromRGB(60,60,72)}, row)
+	new("UICorner", {CornerRadius=UDim.new(1,0)}, dot)
+	local on = default or false
+	V[key] = on
+	if on then dot.BackgroundColor3 = Color3.fromRGB(90,220,120) end
+	local b = new("TextButton", {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text=""}, row)
+	b.MouseButton1Click:Connect(function()
+		on = not on
+		V[key] = on
+		dot.BackgroundColor3 = on and Color3.fromRGB(90,220,120) or Color3.fromRGB(60,60,72)
+	end)
+	return row
+end
+
+local function button(parent, txt, cb)
+	local b = new("TextButton", {Size=UDim2.new(1,0,0,26), BackgroundColor3=Color3.fromRGB(38,38,50), Font=Enum.Font.Gotham, TextSize=12, TextColor3=Color3.fromRGB(220,220,230), Text=txt}, parent)
+	new("UICorner", {CornerRadius=UDim.new(0,6)}, b)
+	b.MouseButton1Click:Connect(function() pcall(cb) end)
+	return b
+end
+
+local function dropdown(parent, title, getOptions, onPick)
+	local holder = new("Frame", {Size=UDim2.new(1,0,0,26), BackgroundColor3=Color3.fromRGB(38,38,50)}, parent)
+	new("UICorner", {CornerRadius=UDim.new(0,6)}, holder)
+	local cur = new("TextLabel", {Size=UDim2.new(1,-20,1,0), Position=UDim2.new(0,10,0,0), BackgroundTransparency=1, Font=Enum.Font.Gotham, TextSize=11, TextColor3=Color3.fromRGB(200,200,215), TextXAlignment=Enum.TextXAlignment.Left, Text=title.."  ▾"}, holder)
+	local list = new("ScrollingFrame", {Size=UDim2.new(1,0,0,140), Position=UDim2.new(0,0,1,4), BackgroundColor3=Color3.fromRGB(24,24,32), CanvasSize=UDim2.new(0,0,0,0), AutomaticCanvasSize=Enum.AutomaticSize.Y, ScrollBarThickness=3, Visible=false, ZIndex=5}, holder)
+	new("UICorner", {CornerRadius=UDim.new(0,6)}, list)
+	local function build()
+		for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+		for _, opt in ipairs(getOptions()) do
+			local o = new("TextButton", {Size=UDim2.new(1,0,0,24), BackgroundTransparency=1, Font=Enum.Font.Gotham, TextSize=11, TextColor3=Color3.fromRGB(210,210,225), TextXAlignment=Enum.TextXAlignment.Left, Text="  "..opt, ZIndex=6}, list)
+			o.MouseButton1Click:Connect(function()
+				cur.Text = opt
+				list.Visible = false
+				onPick(opt)
+			end)
+		end
+	end
+	new("TextButton", {Size=UDim2.new(1,0,1,0), BackgroundTransparency=1, Text="", ZIndex=4}, holder).MouseButton1Click:Connect(function()
+		build(); list.Visible = not list.Visible
+	end)
+	return holder
+end
+
+-- Farm
+local pf = page("Farm")
+label(pf, "AUTO FARM")
+toggle(pf, "Auto Farm Level", "AutoFarm")
+toggle(pf, "Aceitar quest automatica", "AutoQuest", true)
+toggle(pf, "Bring Mobs", "Bring", true)
+toggle(pf, "Fast Attack (M1 + Z/X)", "FastAttack", true)
+toggle(pf, "Kill Aura", "KillAura")
+label(pf, "UTILITARIOS")
+toggle(pf, "Auto Buso", "AutoBuso")
+toggle(pf, "Auto Coletar Baus", "AutoChest")
+toggle(pf, "Anti AFK", "AntiAFK", true)
+label(pf, "PONTOS (escolha 1)")
+dropdown(pf, "Status para upar", function() return {"Melee","Sword","Gun","Demon Fruit","Defense"} end, function(o) V.AutoStat = o end)
+
+-- Quests
+local pq = page("Quests")
+label(pq, "SELECIONE UMA QUEST (Sea "..Sea..")")
+local names = {}
+for _, q in ipairs(QDB[Sea]) do
+	names[#names+1] = q[2].."  ·  Lv "..q[1].."  ·  NPC: "..q[6].."  ·  "..q[5]
+end
+local function selectedQuest()
+	if not V.Selected then return nil end
+	for _, q in ipairs(QDB[Sea]) do if q[2] == V.Selected then return q end end
+end
+dropdown(pq, "Quest", function() return names end, function(o)
+	V.Selected = o:match("^(.-)  ·")
+	notify("Quest: "..V.Selected)
+end)
+button(pq, "Ir para o NPC", function()
+	local q = selectedQuest(); if not q then return notify("Escolha uma quest") end
+	enter(q); travel(q[6]); notify("Indo ao NPC: "..q[6])
+end)
+button(pq, "Iniciar quest", function()
+	local q = selectedQuest(); if not q then return notify("Escolha uma quest") end
+	local r = root()
+	if r and (r.Position - q[6].Position).Magnitude > 20 then travel(q[6]) end
+	CommF:InvokeServer("StartQuest", q[3], q[4]); notify("Quest iniciada: "..q[2])
+end)
+button(pq, "Ir para os mobs", function()
+	local q = selectedQuest(); if not q then return notify("Escolha uma quest") end
+	enter(q); travel(q[8]); notify("Indo aos mobs")
+end)
+button(pq, "Abandonar quest", function() CommF:InvokeServer("AbandonQuest"); notify("Quest abandonada") end)
+button(pq, "Usar farm automatico por nivel", function() V.Selected = nil; V.AutoFarm = true; notify("Auto farm por nivel ativado") end)
+
+-- Teleport
+local pt = page("Teleport")
+label(pt, "ILHAS")
+local islands = {}
+for _, q in ipairs(QDB[Sea]) do
+	if not table.find(islands, q[5]) then islands[#islands+1] = q[5] end
+end
+local islandPos = {}
+for _, q in ipairs(QDB[Sea]) do islandPos[q[5]] = islandPos[q[5]] or q[6] end
+dropdown(pt, "Ilha", function() return islands end, function(o)
+	travel(islandPos[o]); notify("Teleportado: "..o)
+end)
+label(pt, "CHEFES / BOSSES")
+dropdown(pt, "Boss", function()
+	local b = {}
+	for _, q in ipairs(QDB[Sea]) do if string.find(q[2], "King") or string.find(q[2], "Admiral") or string.find(q[2], "Lord") or string.find(q[2], "God") or string.find(q[2], "Warden") or string.find(q[2], "Cyborg") or string.find(q[2], "Diamond") or string.find(q[2], "Jeremy") or string.find(q[2], "Tide") or string.find(q[2], "Stone") or string.find(q[2], "Queen") or string.find(q[2], "Leader") or string.find(q[2], "Elephant") or string.find(q[2], "Beautiful") then b[#b+1] = q[2] end end
+	return b
+end, function(o)
+	for _, q in ipairs(QDB[Sea]) do if q[2] == o then travel(q[8]); notify("Indo ao boss: "..o) end end
+end)
+button(pt, "Voltar ao spawn", function() travel(workspace.SpawnLocation.CFrame) end)
+
+-- Misc
+local pm = page("Misc")
+label(pm, "TIME / HAKI")
+button(pm, "Entrar no time Pirata", function() CommF:InvokeServer("SetTeam", "Pirates"); notify("Time: Piratas") end)
+button(pm, "Entrar no time Marinha", function() CommF:InvokeServer("SetTeam", "Marines"); notify("Time: Marinha") end)
+button(pm, "Comprar Buso", function() CommF:InvokeServer("BuyHaki", "Buso") end)
+button(pm, "Comprar Geppo", function() CommF:InvokeServer("BuyHaki", "Geppo") end)
+button(pm, "Comprar Soru", function() CommF:InvokeServer("BuyHaki", "Soru") end)
+label(pm, "SERVIDOR / CLIENTE")
+button(pm, "Rejoin", function() TPS:Teleport(game.PlaceId, LP) end)
+button(pm, "Server Hop", function()
+	local http = game:GetService("HttpService")
+	local ok, res = pcall(function() return http:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100")) end)
+	if ok and res and res.data then
+		for _, s in ipairs(res.data) do
+			if s.playing < s.maxPlayers then TPS:TeleportToPlaceInstance(game.PlaceId, s.id, LP); break end
+		end
+	end
+end)
+button(pm, "Full Bright", function() Lighting.Ambient = Color3.new(1,1,1); Lighting.Brightness = 2 end)
+button(pm, "Noclip (toggle)", function() noclip = not noclip; notify("Noclip: "..tostring(noclip)) end)
+
+-- arrastar
+local drag, start, base
+Title.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true; start = i.Position; base = Main.Position end end)
+game:GetService("UserInputService").InputChanged:Connect(function(i)
+	if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
+		Main.Position = UDim2.new(base.X.Scale, base.X.Offset + (i.Position.X - start.X), base.Y.Scale, base.Y.Offset + (i.Position.Y - start.Y))
+	end
+end)
+game:GetService("UserInputService").InputEnded:Connect(function() drag = false end)
+
+Close.MouseButton1Click:Connect(function()
+	V.AutoFarm = false; V.KillAura = false; V.AutoChest = false
+	GUI.Enabled = false
+end)
+
+pages["Farm"].Visible = true
+tabs[1].BackgroundColor3 = Color3.fromRGB(70,50,120)
+notify("Venice Hub carregado · Sea "..Sea)
+
+getgenv().VeniceHub = {Destroy = function() GUI:Destroy() end}
